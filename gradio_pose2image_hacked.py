@@ -10,30 +10,32 @@ import random
 
 from pytorch_lightning import seed_everything
 from annotator.util import resize_image, HWC3
-from annotator.midas import MidasDetector
+from annotator.openpose import OpenposeDetector
 from cldm.model import create_model, load_state_dict
 from ldm.models.diffusion.ddim import DDIMSampler
 
 
-apply_midas = MidasDetector()
+apply_openpose = OpenposeDetector()
 
 model = create_model('./models/cldm_v15.yaml').cpu()
-model.load_state_dict(load_state_dict('./models/control_sd15_normal.pth', location='cuda'))
+# model.load_state_dict(load_state_dict('./models/control_dreamlike_openpose.pth', location='cuda'))
+model.load_state_dict(load_state_dict('./models/control_meartsty.pth', location='cuda'))
+
 model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
 
-def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, scale, seed, eta, bg_threshold):
+def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, scale, seed, eta):
     with torch.no_grad():
         input_image = HWC3(input_image)
-        _, detected_map = apply_midas(resize_image(input_image, detect_resolution), bg_th=bg_threshold)
+        detected_map, _ = apply_openpose(resize_image(input_image, detect_resolution))
         detected_map = HWC3(detected_map)
         img = resize_image(input_image, image_resolution)
         H, W, C = img.shape
 
-        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_LINEAR)
+        detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
 
-        control = torch.from_numpy(detected_map[:, :, ::-1].copy()).float().cuda() / 255.0
+        control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
         control = torch.stack([control for _ in range(num_samples)], dim=0)
         control = einops.rearrange(control, 'b h w c -> b c h w').clone()
 
@@ -69,7 +71,7 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
 block = gr.Blocks().queue()
 with block:
     with gr.Row():
-        gr.Markdown("## Control Stable Diffusion with Normal Maps")
+        gr.Markdown("## Control Stable Diffusion with Human Pose - Using OpenDream")
     with gr.Row():
         with gr.Column():
             input_image = gr.Image(source='upload', type="numpy")
@@ -78,8 +80,7 @@ with block:
             with gr.Accordion("Advanced options", open=False):
                 num_samples = gr.Slider(label="Images", minimum=1, maximum=12, value=1, step=1)
                 image_resolution = gr.Slider(label="Image Resolution", minimum=256, maximum=768, value=512, step=256)
-                detect_resolution = gr.Slider(label="Normal Resolution", minimum=128, maximum=1024, value=384, step=1)
-                bg_threshold = gr.Slider(label="Normal background threshold", minimum=0.0, maximum=1.0, value=0.4, step=0.01)
+                detect_resolution = gr.Slider(label="OpenPose Resolution", minimum=128, maximum=1024, value=512, step=1)
                 ddim_steps = gr.Slider(label="Steps", minimum=1, maximum=100, value=20, step=1)
                 scale = gr.Slider(label="Guidance Scale", minimum=0.1, maximum=30.0, value=9.0, step=0.1)
                 seed = gr.Slider(label="Seed", minimum=-1, maximum=2147483647, step=1, randomize=True)
@@ -89,7 +90,7 @@ with block:
                                       value='longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality')
         with gr.Column():
             result_gallery = gr.Gallery(label='Output', show_label=False, elem_id="gallery").style(grid=2, height='auto')
-    ips = [input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, scale, seed, eta, bg_threshold]
+    ips = [input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, scale, seed, eta]
     run_button.click(fn=process, inputs=ips, outputs=[result_gallery])
 
 
