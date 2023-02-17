@@ -1,7 +1,7 @@
 path_sd15 = './models/v1-5-pruned.ckpt'
 path_sd15_with_control = './models/control_sd15_openpose.pth'
-path_input = './models/meartsty.ckpt'
-path_output = './models/control_meartsty.pth'
+path_input = './models/zora2.ckpt'
+path_output = './models/control_zora2.pth'
 
 
 import os
