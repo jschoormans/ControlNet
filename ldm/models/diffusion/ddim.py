@@ -151,9 +151,12 @@ class DDIMSampler(object):
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
 
+            print('HAHAHDDJDSSDDS')
             if mask is not None:
                 assert x0 is not None
                 img_orig = self.model.q_sample(x0, ts)  # TODO: deterministic forward pass?
+                
+                print('mask', mask.shape, 'img_orig', img_orig.shape, 'img', img.shape)
                 img = img_orig * mask + (1. - mask) * img
 
             if ucg_schedule is not None:

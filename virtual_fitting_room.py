@@ -30,7 +30,7 @@ model = model.cuda()
 ddim_sampler = DDIMSampler(model)
 
 
-def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, scale, seed, eta):
+def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resolution, detect_resolution, ddim_steps, scale, seed, eta, mask):
     with torch.no_grad():
         input_image = HWC3(input_image)
         detected_map, _ = apply_openpose(resize_image(input_image, detect_resolution))
@@ -38,11 +38,42 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
         img = resize_image(input_image, image_resolution)
         H, W, C = img.shape
 
+        print('input_image shape: ', input_image.shape)
+        print('img shape: ', img.shape)
+        print(' mask shape: ', mask.shape)
+        print('detected_map.shape: ', detected_map.shape)
+
         detected_map = cv2.resize(detected_map, (W, H), interpolation=cv2.INTER_NEAREST)
+        print('detected_map.shape after cv2 resize: ', detected_map.shape)
+
+
 
         control = torch.from_numpy(detected_map.copy()).float().cuda() / 255.0
         control = torch.stack([control for _ in range(num_samples)], dim=0)
         control = einops.rearrange(control, 'b h w c -> b c h w').clone()
+        print('control shape: ', control.shape)
+
+        # not sure about these lines - can maybe find this in another repo
+        mask_torch = cv2.resize(mask, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
+        mask_torch = torch.from_numpy(mask_torch).float().cuda() / 255.0
+        mask_torch = torch.stack([mask_torch for _ in range(num_samples)], dim=0)
+        mask_torch = einops.rearrange(mask_torch, 'b h w c -> b c h w').clone()
+
+        # make sure 2nd dimension is 1
+        mask_torch = mask_torch[:, 0:1, :, :]
+        # copy the 2nd dimension 4 times 
+        mask_torch = torch.cat((mask_torch, mask_torch, mask_torch, mask_torch), dim=1)
+        
+        input_torch = cv2.resize(input_image, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
+        input_torch = torch.from_numpy(input_torch).float().cuda() / 255.0
+        input_torch = torch.stack([input_torch for _ in range(num_samples)], dim=0)
+        input_torch = einops.rearrange(input_torch, 'b h w c -> b c h w').clone()
+        # make sure 2nd dimension is 4 (was 3, add zeros)
+        input_torch = torch.cat((torch.zeros(input_torch.shape[0], 1, input_torch.shape[2], input_torch.shape[3]).cuda(), input_torch, ), dim=1)
+
+        print('input_torch shape: ', input_torch.shape)
+        print('mask_torch shape: ', mask_torch.shape)
+
 
         if seed == -1:
             seed = random.randint(0, 65535)
@@ -61,7 +92,8 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
         samples, intermediates = ddim_sampler.sample(ddim_steps, num_samples,
                                                      shape, cond, verbose=False, eta=eta,
                                                      unconditional_guidance_scale=scale,
-                                                     unconditional_conditioning=un_cond)
+                                                     unconditional_conditioning=un_cond, 
+                                                     mask=mask_torch, x0=input_torch)
 
         if config.save_memory:
             model.low_vram_shift(is_diffusing=False)
@@ -75,31 +107,56 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
 
 #%%
 from PIL import Image
+from fittingroom import segmentation_models as sm
+import numpy as np
+from fittingroom.utils import resizeImgMultipleEight, pasteMaskedPart
 
-src_image_fn = 'clothing_app/sample_pics/woman1.jpg'
+src_image_fn = 'fittingroom/sample_pics/woman1.jpg'
 
 input_image = Image.open(src_image_fn)
+input_image = resizeImgMultipleEight(input_image, MAXSIZE=512)
+input_image_numpy = np.array(input_image)
+headmask = sm.headmask(input_image_numpy)
+headmask = sm.humanseg(input_image_numpy)
+
+print('headmask made!', headmask.shape)
+
+
 prompt = "woman wearing a dress"
 a_prompt = "4K, 8K, photography, high quality"
 n_prompt = ""
 num_samples = 1
 image_resolution = 512
 detect_resolution = 256
-ddim_steps = 100
+ddim_steps = 20
 scale = 9.0
 seed = -1
 eta = 0.1
+mask = headmask
 
 
-input_image_numpy = np.array(input_image)
 test = process(input_image_numpy, prompt,
                a_prompt, n_prompt,
                num_samples, image_resolution,
                detect_resolution, ddim_steps,
-               scale, seed, eta)
+               scale, seed, eta, mask)
+
+# find head mask in original image
+
+
+# paste head mask on top of generated image
+output = Image.fromarray(test[1])
+
+
+# paste the mask on top of the generated image
+if False:
+    output = pasteMaskedPart(headmask, output, input_image)
+
+
 #%%
 # save to file
-filename = 'clothing_app/results/woman1_dress' + str(random.randint(0, 65535)) + '.jpg'
+filename = 'fittingroom/results/woman1_dress' + str(random.randint(0, 65535)) + '.jpg'
 # save test to file
 with open(filename, 'wb') as f:
-    f.write(cv2.imencode('.jpg', test[1])[1])
+    output.save(f, format='JPEG')
+    f.close()
