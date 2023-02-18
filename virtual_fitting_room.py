@@ -53,26 +53,93 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
         control = einops.rearrange(control, 'b h w c -> b c h w').clone()
         print('control shape: ', control.shape)
 
-        # not sure about these lines - can maybe find this in another repo
-        mask_torch = cv2.resize(mask, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
-        mask_torch = torch.from_numpy(mask_torch).float().cuda() / 255.0
-        mask_torch = torch.stack([mask_torch for _ in range(num_samples)], dim=0)
-        mask_torch = einops.rearrange(mask_torch, 'b h w c -> b c h w').clone()
 
-        # make sure 2nd dimension is 1
-        mask_torch = mask_torch[:, 0:1, :, :]
-        # copy the 2nd dimension 4 times 
-        mask_torch = torch.cat((mask_torch, mask_torch, mask_torch, mask_torch), dim=1)
-        
-        input_torch = cv2.resize(input_image, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
-        input_torch = torch.from_numpy(input_torch).float().cuda() / 255.0
-        input_torch = torch.stack([input_torch for _ in range(num_samples)], dim=0)
-        input_torch = einops.rearrange(input_torch, 'b h w c -> b c h w').clone()
-        # make sure 2nd dimension is 4 (was 3, add zeros)
-        input_torch = torch.cat((torch.zeros(input_torch.shape[0], 1, input_torch.shape[2], input_torch.shape[3]).cuda(), input_torch, ), dim=1)
+        if False:
+            # not sure about these lines - can maybe find this in another repo
+            mask_torch = cv2.resize(mask, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
+            mask_torch = torch.from_numpy(mask_torch).float().cuda() / 255.0
+            mask_torch = torch.stack([mask_torch for _ in range(num_samples)], dim=0)
+            mask_torch = einops.rearrange(mask_torch, 'b h w c -> b c h w').clone()
 
-        print('input_torch shape: ', input_torch.shape)
-        print('mask_torch shape: ', mask_torch.shape)
+            # make sure 2nd dimension is 1
+            mask_torch = mask_torch[:, 0:1, :, :]
+            # copy the 2nd dimension 4 times 
+            mask_torch = torch.cat((mask_torch, mask_torch, mask_torch, mask_torch), dim=1)
+            
+            input_torch = cv2.resize(input_image, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
+            input_torch = torch.from_numpy(input_torch).float().cuda() / 255.0
+            input_torch = torch.stack([input_torch for _ in range(num_samples)], dim=0)
+            input_torch = einops.rearrange(input_torch, 'b h w c -> b c h w').clone()
+            # make sure 2nd dimension is 4 (was 3, add zeros)
+            input_torch = torch.cat((torch.zeros(input_torch.shape[0], 1, input_torch.shape[2], input_torch.shape[3]).cuda(), input_torch, ), dim=1)
+
+            print('input_torch shape: ', input_torch.shape)
+            print('mask_torch shape: ', mask_torch.shape)
+
+
+        else:
+                        
+            def preprocess_image(image_path):
+                image = Image.open(image_path)
+                image.thumbnail((W, H))
+                if not image.mode == "RGB":
+                    image = image.convert("RGB")
+                image = np.array(image).astype(np.uint8)
+                image = (image/127.5 - 1.0).astype(np.float32)
+                return image
+
+            def preprocess_mask(mask_path, h, w):
+                mask = Image.open(mask_path).convert('1')
+                mask_resize = mask.resize((w, h))
+                return np.array(mask_resize).astype(np.float32)
+
+            
+            
+            h = H//8
+            w = W//8
+
+            # code from inpainting SD
+            from einops import rearrange, repeat
+            image_fn = 'fittingroom/sample_pics/woman1.jpg'
+
+            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+
+            print('setting up image...')
+            # image_prompt_input = preprocess_image(image_fn)
+            image_prompt_input = (input_image/127.5 - 1.0).astype(np.float32)
+            image_prompt_input = rearrange(image_prompt_input, 'h w c -> c h w')
+            image_prompt_input = torch.from_numpy(image_prompt_input)
+            # image_prompt_input = image_prompt_input.to(memory_format=torch.contiguous_format).to(torch.float16)
+            image_prompt_input = repeat(image_prompt_input, 'c h w -> b c h w', b=num_samples) 
+            print('input image shape:')
+            print(image_prompt_input.shape)
+            
+            image_prompt_input = image_prompt_input.to(device)
+            
+            print('input image shape on device:')
+            print(image_prompt_input)
+
+            
+            #print(image_prompt_input)
+            encoder_posterior = model.encode_first_stage(image_prompt_input )
+            x0 = model.get_first_stage_encoding(encoder_posterior).detach()
+            
+            # MASK PART
+            print('setting up mask...')
+            # mask_prompt_input = preprocess_mask(mask_prompt, h, w)
+            mask_prompt_input = cv2.resize(mask, (W//8, H//8), interpolation=cv2.INTER_NEAREST)
+            mask = torch.tensor(mask_prompt_input)
+            mask = repeat(mask, 'h w -> b h w', b=num_samples).to(device)
+            mask = mask[:, None, ...]
+
+            # hack until I find out what is happening
+            # input_torch = x0[:,:,1:-2,:]
+            input_torch = x0[:,:,:,:]
+            mask_torch = mask[:,:,:,:]
+            print('input_torch shape: ', input_torch.shape)
+            print('mask_torch shape: ', mask_torch.shape)
+
+
 
 
         if seed == -1:
@@ -85,6 +152,7 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
         cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning([prompt + ', ' + a_prompt] * num_samples)]}
         un_cond = {"c_concat": [control], "c_crossattn": [model.get_learned_conditioning([n_prompt] * num_samples)]}
         shape = (4, H // 8, W // 8)
+        print('shape: ', shape)
 
         if config.save_memory:
             model.low_vram_shift(is_diffusing=True)
@@ -115,12 +183,15 @@ src_image_fn = 'fittingroom/sample_pics/woman1.jpg'
 
 input_image = Image.open(src_image_fn)
 input_image = resizeImgMultipleEight(input_image, MAXSIZE=512)
+
+# HACK
+input_image = input_image.resize((512, 512), Image.ANTIALIAS)
+
 input_image_numpy = np.array(input_image)
 headmask = sm.headmask(input_image_numpy)
-headmask = sm.humanseg(input_image_numpy)
 
 print('headmask made!', headmask.shape)
-
+# print('humansegmask made!', humansegmask.shape)
 
 prompt = "woman wearing a dress"
 a_prompt = "4K, 8K, photography, high quality"
@@ -133,6 +204,7 @@ scale = 9.0
 seed = -1
 eta = 0.1
 mask = headmask
+mask = mask[:, :, 0]/255
 
 
 test = process(input_image_numpy, prompt,
