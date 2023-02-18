@@ -111,14 +111,8 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
             image_prompt_input = torch.from_numpy(image_prompt_input)
             # image_prompt_input = image_prompt_input.to(memory_format=torch.contiguous_format).to(torch.float16)
             image_prompt_input = repeat(image_prompt_input, 'c h w -> b c h w', b=num_samples) 
-            print('input image shape:')
-            print(image_prompt_input.shape)
-            
             image_prompt_input = image_prompt_input.to(device)
             
-            print('input image shape on device:')
-            print(image_prompt_input)
-
             
             #print(image_prompt_input)
             encoder_posterior = model.encode_first_stage(image_prompt_input )
@@ -131,13 +125,9 @@ def process(input_image, prompt, a_prompt, n_prompt, num_samples, image_resoluti
             mask = torch.tensor(mask_prompt_input)
             mask = repeat(mask, 'h w -> b h w', b=num_samples).to(device)
             mask = mask[:, None, ...]
+            mask_torch = mask
+            input_torch = x0
 
-            # hack until I find out what is happening
-            # input_torch = x0[:,:,1:-2,:]
-            input_torch = x0[:,:,:,:]
-            mask_torch = mask[:,:,:,:]
-            print('input_torch shape: ', input_torch.shape)
-            print('mask_torch shape: ', mask_torch.shape)
 
 
 
@@ -185,7 +175,7 @@ input_image = Image.open(src_image_fn)
 input_image = resizeImgMultipleEight(input_image, MAXSIZE=512)
 
 # HACK
-input_image = input_image.resize((512, 512), Image.ANTIALIAS)
+input_image = input_image.resize((512, 704), Image.ANTIALIAS)
 
 input_image_numpy = np.array(input_image)
 headmask = sm.headmask(input_image_numpy)
@@ -193,7 +183,7 @@ headmask = sm.headmask(input_image_numpy)
 print('headmask made!', headmask.shape)
 # print('humansegmask made!', humansegmask.shape)
 
-prompt = "woman wearing a dress"
+prompt = "woman wearing a dress, in front of a wall"
 a_prompt = "4K, 8K, photography, high quality"
 n_prompt = ""
 num_samples = 1
@@ -204,7 +194,18 @@ scale = 9.0
 seed = -1
 eta = 0.1
 mask = headmask
-mask = mask[:, :, 0]/255
+mask = mask[:, :, 0]
+print('mask shape: ', mask.shape)
+print('mask: ', mask)
+
+
+## INPAINTING STUFF 
+mask = Image.fromarray(mask).convert('1')
+mask = np.array(mask).astype(np.float32)
+# mask_resize = mask.resize((w, h))
+# return np.array(mask_resize).astype(np.float32)
+
+
 
 
 test = process(input_image_numpy, prompt,
@@ -221,7 +222,7 @@ output = Image.fromarray(test[1])
 
 
 # paste the mask on top of the generated image
-if False:
+if True:
     output = pasteMaskedPart(headmask, output, input_image)
 
 
